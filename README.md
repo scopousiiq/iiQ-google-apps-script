@@ -48,7 +48,7 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 
 1. In the Apps Script editor, you should see a `Code.gs` file in the left panel (or create one if it doesn't exist)
 2. Delete any default placeholder code
-3. Copy the entire contents of `incidentiq-google-apps-script.gs` from this folder
+3. Copy the entire contents of `syncTicketViewWithSlas.gs` from this folder
 4. Paste it into the `Code.gs` file in the Apps Script editor
 
 ### Step 4: Configure the Script
