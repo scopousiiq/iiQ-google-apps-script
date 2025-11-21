@@ -80,12 +80,12 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 
 | Sheet Name | Ticket Type ID | View ID | Start Row | Start Column |
 |---|---|---|---|---|
-| Devices/Hardware | d5d91f20-2269-e611-80f1-000c29ab80b0 | {view-guid-1} | 2 | 5 |
-| Software Licenses | a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6 | {view-guid-2} | 2 | 5 |
+| Devices/Hardware | `{ticket-type-id-1}` | `{view-id-1}` | 2 | 5 |
+| Software Licenses | `{ticket-type-id-2}` | `{view-id-2}` | 2 | 5 |
 
    - **Sheet Name**: Must match an existing sheet tab in your workbook
-   - **Ticket Type ID**: GUID of the ticket type to filter by (obtain from Incident IQ)
-   - **View ID**: GUID of the view containing tickets to sync
+   - **Ticket Type ID**: GUID of the ticket type to filter by. Obtain this from the `GET /api/v1.0/tickets/wizards` API endpoint (shows available ticket types)
+   - **View ID**: GUID of the view containing tickets to sync. Obtain this from the `GET /api/v1.0/users/views` API endpoint (shows views available to your API user account)
    - **Start Row/Column**: Where to begin writing data (optional; uses defaults if blank)
 
 ### Step 6: Save the Script
@@ -212,8 +212,8 @@ The `Config` sheet should have the following columns:
 | Column | Name | Required | Description | Example |
 |--------|------|----------|-------------|---------|
 | A | Sheet Name | Yes | Name of the target sheet tab | `Devices/Hardware` |
-| B | Ticket Type ID | Yes | GUID of the ticket type filter | `d5d91f20-2269-e611-80f1-000c29ab80b0` |
-| C | View ID | Yes | GUID of the view to sync | `12345678-abcd-ef01-2345-6789abcdef01` |
+| B | Ticket Type ID | Yes | GUID of the ticket type filter. Obtain from `GET /api/v1.0/tickets/wizards` API | `{ticket-type-id}` |
+| C | View ID | Yes | GUID of the view to sync. Obtain from `GET /api/v1.0/users/views` API | `{view-id}` |
 | D | Start Row | No | Row to begin writing (default: 2) | `2` |
 | E | Start Column | No | Column to begin writing (default: 5 for E) | `5` |
 
