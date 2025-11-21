@@ -322,8 +322,10 @@ function fetchSlasForTickets_(tickets) {
 
     // Map SLA data by TicketId for quick lookup
     slaItems.forEach(slaItem => {
-      if (slaItem?.TicketId && !slaLookup[slaItem.TicketId]) {
-        slaLookup[slaItem.TicketId] = slaItem;
+      // The SLA response contains the ticket identifier - try multiple possible field names
+      const ticketId = slaItem?.TicketId || slaItem?.Id || slaItem?.TicketNumber;
+      if (ticketId && !slaLookup[ticketId]) {
+        slaLookup[ticketId] = slaItem;
         totalSlasRetrieved++;
       }
     });
@@ -365,63 +367,42 @@ function buildSheetRow_(ticket, slaLookup) {
 
 /**
  * Attempts to read a resolution time target from SLA details and actual time from SlaTimes.
- * Returns formatted string like "Sla: < 2 Days / Actual: 6.2 Days"
+ * Returns formatted string like "Sla: < 2 Days / Actual: 0.07 Days"
  */
 function deriveResolutionTime_(ticket, slaDetails) {
   if (!slaDetails) {
     return '';
   }
 
-  // Try to extract SLA metrics
-  let slaTarget = null;
-  if (slaDetails?.Metrics && Array.isArray(slaDetails.Metrics)) {
-    const resolutionMetric = slaDetails.Metrics.find(m => m.MetricTypeId === 1); // Assuming 1 = Resolution
+  // Extract SLA target (Resolution Time metric - typically the first metric)
+  let slaTargetDays = null;
+  if (slaDetails?.Sla?.Metrics && Array.isArray(slaDetails.Sla.Metrics)) {
+    // Find the Resolution Time metric (Name field contains "Resolution")
+    const resolutionMetric = slaDetails.Sla.Metrics.find(m => m.Name && m.Name.includes('Resolution'));
     if (resolutionMetric) {
-      slaTarget = resolutionMetric.TargetDate;
+      slaTargetDays = resolutionMetric.Value; // e.g., 5 Days
     }
   }
 
-  // Try to extract actual resolution time
+  // Extract actual resolution time from SlaTimes (convert minutes to days)
   let actualDays = null;
   if (slaDetails?.SlaTimes && Array.isArray(slaDetails.SlaTimes)) {
-    const resolutionTime = slaDetails.SlaTimes.find(st => st.MetricTypeId === 1);
-    if (resolutionTime && resolutionTime.DueDate && ticket?.ClosedDate) {
-      actualDays = calculateDaysDifference_(ticket.ClosedDate, resolutionTime.DueDate);
+    const resolutionTime = slaDetails.SlaTimes.find(st => st.Name && st.Name.includes('Resolution'));
+    if (resolutionTime && typeof resolutionTime.LogMinutes === 'number') {
+      actualDays = resolutionTime.LogMinutes / (60 * 24); // Convert minutes to days
     }
   }
 
   let result = '';
-  if (slaTarget) {
-    result += `Sla: < ${extractDaysFromDate_(slaTarget)} Days`;
+  if (slaTargetDays !== null) {
+    result += `Sla: < ${slaTargetDays} Days`;
   }
   if (actualDays !== null) {
     if (result) result += ' / ';
-    result += `Actual: ${actualDays.toFixed(1)} Days`;
+    result += `Actual: ${actualDays.toFixed(2)} Days`;
   }
 
   return result;
-}
-
-/**
- * Parses a date string and returns the number of days until that date (or from now).
- */
-function extractDaysFromDate_(dateStr) {
-  if (!dateStr) return 'N/A';
-  const targetDate = new Date(dateStr);
-  const now = new Date();
-  const diffMs = targetDate - now;
-  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-  return Math.max(0, diffDays);
-}
-
-/**
- * Calculates the number of days between two date strings.
- */
-function calculateDaysDifference_(dateStr1, dateStr2) {
-  const date1 = new Date(dateStr1);
-  const date2 = new Date(dateStr2);
-  const diffMs = Math.abs(date2 - date1);
-  return diffMs / (1000 * 60 * 60 * 24);
 }
 
 /**
