@@ -40,8 +40,7 @@ const INCIDENT_IQ_CONFIG = {
 };
 
 /**
- * Main entrypoint: reads all configurations from the Config sheet and syncs each configured sheet.
- * Invoked from the Apps Script editor or via time-based trigger.
+ * Main entrypoint to sync all configured sheets.
  */
 function syncAllConfiguredSheets() {
   debugLog_('Starting syncAllConfiguredSheets...');
@@ -373,100 +372,91 @@ function deriveResolutionTime_(ticket, slaDetails) {
     return '';
   }
 
-  // Debug: log the structure
-  debugLog_(`Debug - slaDetails keys: ${Object.keys(slaDetails || {}).join(', ')}`);
-
-  // Find Resolution Time metric in Metrics array for SLA target
-  let slaValue = '';
-  let metrics = slaDetails?.Metrics;
-  
-  // If Metrics is not found directly, check if it's nested under Sla
-  if (!metrics && slaDetails?.Sla?.Metrics) {
-    metrics = slaDetails.Sla.Metrics;
-  }
-
-  if (Array.isArray(metrics)) {
-    debugLog_(`Debug - Found ${metrics.length} metrics`);
-    const resolutionMetric = metrics.find(
-      metric => metric?.Name && /resolution\s*time/i.test(metric.Name)
-    );
+  // Try to extract SLA metrics
+  let slaTarget = null;
+  if (slaDetails?.Metrics && Array.isArray(slaDetails.Metrics)) {
+    const resolutionMetric = slaDetails.Metrics.find(m => m.MetricTypeId === 1); // Assuming 1 = Resolution
     if (resolutionMetric) {
-      debugLog_(`Debug - Resolution metric found: Value=${resolutionMetric.Value}, Unit=${resolutionMetric.Unit}, ValueInMinutes=${resolutionMetric.ValueInMinutes}`);
-      // Try to get Value and Unit first, then fall back to ValueInMinutes
-      if (resolutionMetric.Value && resolutionMetric.Unit) {
-        slaValue = `${resolutionMetric.Value} ${resolutionMetric.Unit}`;
-      } else if (resolutionMetric.ValueInMinutes) {
-        const days = (resolutionMetric.ValueInMinutes / 1440).toFixed(1);
-        slaValue = `${days} Days`;
-      }
-    } else {
-      debugLog_(`Debug - No resolution metric found. Metrics: ${JSON.stringify(metrics.map(m => m.Name))}`);
-    }
-  } else {
-    debugLog_(`Debug - Metrics is not an array or not found. Type: ${typeof metrics}`);
-  }
-
-  // Find Resolution Time in SlaTimes array for actual time
-  let actualValue = '';
-  const slaTimes = slaDetails?.SlaTimes;
-  if (Array.isArray(slaTimes)) {
-    const resolutionTime = slaTimes.find(
-      time => time?.Name && /resolution\s*time/i.test(time.Name)
-    );
-    if (resolutionTime && resolutionTime.LogMinutes !== undefined && resolutionTime.LogMinutes !== null) {
-      const days = (resolutionTime.LogMinutes / 1440).toFixed(1); // 1440 minutes in a day
-      actualValue = `${days} Days`;
-      debugLog_(`Debug - Resolution time found: LogMinutes=${resolutionTime.LogMinutes}, Days=${days}`);
+      slaTarget = resolutionMetric.TargetDate;
     }
   }
 
-  // Format the output
-  if (slaValue && actualValue) {
-    return `Sla: < ${slaValue} / Actual: ${actualValue}`;
-  } else if (slaValue) {
-    return `Sla: < ${slaValue}`;
-  } else if (actualValue) {
-    return `Actual: ${actualValue}`;
+  // Try to extract actual resolution time
+  let actualDays = null;
+  if (slaDetails?.SlaTimes && Array.isArray(slaDetails.SlaTimes)) {
+    const resolutionTime = slaDetails.SlaTimes.find(st => st.MetricTypeId === 1);
+    if (resolutionTime && resolutionTime.DueDate && ticket?.ClosedDate) {
+      actualDays = calculateDaysDifference_(ticket.ClosedDate, resolutionTime.DueDate);
+    }
   }
 
-  return '';
+  let result = '';
+  if (slaTarget) {
+    result += `Sla: < ${extractDaysFromDate_(slaTarget)} Days`;
+  }
+  if (actualDays !== null) {
+    if (result) result += ' / ';
+    result += `Actual: ${actualDays.toFixed(1)} Days`;
+  }
+
+  return result;
 }
 
-function formatDateForSheet_(isoDate) {
-  const date = new Date(isoDate);
-  const tz = Session.getScriptTimeZone();
-  return Utilities.formatDate(date, tz, 'yyyy-MM-dd HH:mm');
+/**
+ * Parses a date string and returns the number of days until that date (or from now).
+ */
+function extractDaysFromDate_(dateStr) {
+  if (!dateStr) return 'N/A';
+  const targetDate = new Date(dateStr);
+  const now = new Date();
+  const diffMs = targetDate - now;
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  return Math.max(0, diffDays);
 }
 
-function clearDestination_(sheet, config) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow >= config.startRow) {
-    sheet
-      .getRange(
-        config.startRow,
-        config.startColumn,
-        Math.max(lastRow - config.startRow + 1, 1),
-        7
-      )
-      .clearContent();
+/**
+ * Calculates the number of days between two date strings.
+ */
+function calculateDaysDifference_(dateStr1, dateStr2) {
+  const date1 = new Date(dateStr1);
+  const date2 = new Date(dateStr2);
+  const diffMs = Math.abs(date2 - date1);
+  return diffMs / (1000 * 60 * 60 * 24);
+}
+
+/**
+ * Formats a date for display in a spreadsheet cell.
+ */
+function formatDateForSheet_(dateStr) {
+  try {
+    const date = new Date(dateStr);
+    return Utilities.formatDate(date, SpreadsheetApp.getActive().getSpreadsheetTimeZone(), 'M/d/yyyy');
+  } catch (e) {
+    return dateStr || '';
   }
 }
 
 /**
- * Determines whether more pages should be requested using Paging metadata.
+ * Checks if there are more pages in the paginated response.
  */
 function hasMorePages_(response, pageSize) {
-  const paging = response?.Paging || response?.paging;
-  if (paging && typeof paging.PageCount === 'number' && typeof paging.PageIndex === 'number') {
-    return paging.PageIndex < paging.PageCount - 1;
-  }
-
-  const items = Array.isArray(response?.Items) ? response.Items : [];
-  return Boolean(pageSize && items.length === pageSize);
+  const totalRecords = response?.TotalRecordCount ?? response?.TotalCount ?? 0;
+  const itemCount = Array.isArray(response?.Items) ? response.Items.length : 0;
+  return itemCount >= pageSize && itemCount > 0;
 }
 
 /**
- * Base Incident IQ request helper that injects auth headers.
+ * Clears the destination range in the spreadsheet.
+ */
+function clearDestination_(sheet, config) {
+  // Clear a large range starting at the start position to ensure we clean up old data
+  const maxClearRows = 10000;
+  const rangeToClear = sheet.getRange(config.startRow, config.startColumn, maxClearRows, 7);
+  rangeToClear.clearContent();
+}
+
+/**
+ * Makes a request to the Incident IQ API with proper authentication headers.
  */
 function incidentIqRequest_(pathWithQuery, method, body) {
   const url = `https://${INCIDENT_IQ_CONFIG.subdomain}.incidentiq.com${pathWithQuery}`;
@@ -498,6 +488,9 @@ function incidentIqRequest_(pathWithQuery, method, body) {
   return content ? JSON.parse(content) : {};
 }
 
+/**
+ * Builds a query string from an object of parameters.
+ */
 function buildQueryString_(params) {
   const filtered = Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null);
   if (!filtered.length) {
@@ -508,4 +501,162 @@ function buildQueryString_(params) {
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join('&');
   return `?${query}`;
+}
+
+/**
+ * Fetches all available ticket types from the Incident IQ API.
+ * Uses GET /api/v1.0/tickets/wizards endpoint.
+ * @returns {Array} Array of ticket type objects with Id (TicketWizardCategoryId) and Name properties
+ */
+function fetchAllTicketTypes_() {
+  console.log('Fetching ticket types from GET /api/v1.0/tickets/wizards...');
+  
+  const response = incidentIqRequest_('/api/v1.0/tickets/wizards', 'get', null);
+  
+  // Extract ticket types from the response - Items is at root level
+  const ticketTypes = [];
+  if (Array.isArray(response?.Items)) {
+    response.Items.forEach(ticketType => {
+      ticketTypes.push({
+        Id: ticketType.TicketWizardCategoryId,
+        Name: ticketType.Name
+      });
+    });
+  }
+
+  console.log(`Extracted ${ticketTypes.length} ticket types.`);
+  return ticketTypes;
+}
+
+/**
+ * Fetches all available tags from the Incident IQ API.
+ * Uses POST /api/v1.0/tags/query endpoint.
+ * @returns {Array} Array of tag objects with Id (TagId) and Name properties
+ */
+function fetchAllTags_() {
+  console.log('Fetching tags from POST /api/v1.0/tags/query...');
+  
+  const response = incidentIqRequest_('/api/v1.0/tags/query', 'post', {});
+  
+  const tags = [];
+  if (Array.isArray(response?.Items)) {
+    response.Items.forEach(tag => {
+      tags.push({
+        Id: tag.TagId,
+        Name: tag.Name
+      });
+    });
+  }
+
+  console.log(`Extracted ${tags.length} tags.`);
+  return tags;
+}
+
+/**
+ * Entrypoint to fetch and populate the "Ticket Types" sheet if it exists.
+ * Can be run independently without executing the full sync.
+ */
+function populateTicketTypeReference() {
+  console.log('Starting populateTicketTypeReference...');
+  
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Ticket Types');
+  
+  if (!sheet) {
+    console.log('Ticket Types sheet not found. Skipping population.');
+    return;
+  }
+  
+  validateApiConfig_();
+  console.log('API config validation passed.');
+
+  try {
+    const ticketTypes = fetchAllTicketTypes_();
+    console.log(`Fetched ${ticketTypes.length} ticket types.`);
+
+    writeTicketTypesToSheet_(sheet, ticketTypes);
+    console.log('Ticket types written to "Ticket Types" sheet.');
+  } catch (error) {
+    console.error(`Failed to populate ticket types: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Writes ticket types to the provided sheet with formatted headers and data.
+ * @param {Sheet} sheet - The sheet to populate
+ * @param {Array} ticketTypes - Array of ticket type objects
+ */
+function writeTicketTypesToSheet_(sheet, ticketTypes) {
+  // Clear existing data
+  sheet.clear();
+  
+  // Write header row
+  const headerRow = ['Name', 'ID'];
+  sheet.getRange(1, 1, 1, 2).setValues([headerRow]);
+  sheet.getRange(1, 1, 1, 2).setFontWeight('bold');
+  sheet.getRange(1, 1, 1, 2).setBackground('#D3D3D3');
+
+  // Write ticket type data
+  if (ticketTypes.length > 0) {
+    const dataRows = ticketTypes.map(tt => [tt.Name, tt.Id]);
+    sheet.getRange(2, 1, dataRows.length, 2).setValues(dataRows);
+  }
+
+  // Auto-fit columns
+  sheet.autoResizeColumns(1, 2);
+  
+  console.log(`Wrote ${ticketTypes.length} ticket types to sheet.`);
+}
+
+/**
+ * Entrypoint to fetch and populate the "Ticket Tags" sheet if it exists.
+ * Can be run independently without executing the full sync.
+ */
+function populateTicketTagsReference() {
+  console.log('Starting populateTicketTagsReference...');
+  
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Ticket Tags');
+  
+  if (!sheet) {
+    console.log('Ticket Tags sheet not found. Skipping population.');
+    return;
+  }
+  
+  validateApiConfig_();
+  console.log('API config validation passed.');
+
+  try {
+    const tags = fetchAllTags_();
+    console.log(`Fetched ${tags.length} tags.`);
+    writeTagsToSheet_(sheet, tags);
+    console.log('Tags written to "Ticket Tags" sheet.');
+  } catch (error) {
+    console.error(`Failed to populate tags: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Writes tags to the provided sheet with formatted headers and data.
+ * @param {Sheet} sheet - The sheet to populate
+ * @param {Array} tags - Array of tag objects
+ */
+function writeTagsToSheet_(sheet, tags) {
+  // Clear existing data
+  sheet.clear();
+  
+  const headerRow = ['Name', 'ID'];
+  sheet.getRange(1, 1, 1, 2).setValues([headerRow]);
+  sheet.getRange(1, 1, 1, 2).setFontWeight('bold');
+  sheet.getRange(1, 1, 1, 2).setBackground('#D3D3D3');
+
+  if (tags.length > 0) {
+    const dataRows = tags.map(tag => [tag.Name, tag.Id]);
+    sheet.getRange(2, 1, dataRows.length, 2).setValues(dataRows);
+  }
+
+  sheet.autoResizeColumns(1, 2);
+  console.log(`Wrote ${tags.length} tags to sheet.`);
 }

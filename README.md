@@ -122,6 +122,38 @@ Click **File** → **Save** (or use Ctrl+S / Cmd+S) and give your project a name
 
 Now the script will run automatically on your schedule, syncing all configured sheets.
 
+### Populating Reference Sheets for Easy Configuration
+
+The script includes two utility functions that fetch available ticket types and tags from Incident IQ and populate reference sheets in your spreadsheet. This makes it easy to find the correct IDs to use in your Config sheet without manually calling the API.
+
+#### Option 1: Populate Ticket Types Reference
+
+Before configuring your Config sheet, you may want to see which ticket types are available:
+
+1. In your Google Sheet, create a new sheet tab named **`Ticket Types`**
+2. In the Apps Script editor, click the **▶ Run** button dropdown and select **`populateTicketTypeReference`** (or just click **Run**)
+3. Grant authorization if prompted
+4. Return to your Google Sheet and refresh/reload the page
+5. The `Ticket Types` sheet will now contain all available ticket types with their IDs:
+   - **Column A**: Ticket Type Name (e.g., "Devices / Hardware")
+   - **Column B**: Ticket Type ID (the GUID to copy into your Config sheet)
+6. Copy the IDs you need into the "Ticket Type ID(s)" column in your Config sheet
+
+#### Option 2: Populate Ticket Tags Reference
+
+Similarly, to see which tags are available:
+
+1. In your Google Sheet, create a new sheet tab named **`Ticket Tags`**
+2. In the Apps Script editor, click the **▶ Run** button dropdown and select **`populateTicketTagsReference`** (or just click **Run**)
+3. Grant authorization if prompted
+4. Return to your Google Sheet and refresh/reload the page
+5. The `Ticket Tags` sheet will now contain all available tags with their IDs:
+   - **Column A**: Tag Name (e.g., "Security Incident", "Authorized for BPS101")
+   - **Column B**: Tag ID (the GUID to copy into your Config sheet)
+6. Copy the IDs you need into the "Tags" column in your Config sheet (comma-separated if multiple)
+
+**Note**: These reference sheets are **optional** and only used for lookup. The script will work perfectly fine without them. However, they make configuration much easier, especially for non-technical users who don't want to manually call the API endpoints.
+
 ### Monitoring Execution with Debug Mode
 
 1. Set `debugMode: true` in the `INCIDENT_IQ_CONFIG` object
