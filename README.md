@@ -16,10 +16,13 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 
 - **Bulk SLA Fetching**: Uses `POST /api/v1.0/tickets/slas` to fetch SLA data for all tickets in one paginated call (not individual requests)
 - **View Filtering**: Filters tickets by a saved view using the view facet filter
+- **Ticket Type Filtering**: Optional filtering by single or multiple ticket types (comma-separated)
+- **Tag Filtering**: Optional filtering by single or multiple tags (comma-separated)
 - **SLA Formatting**: Displays SLA target and actual resolution times in the format: `Sla: < 2 Days / Actual: 6.2 Days`
+- **Multi-Sheet Sync**: Configure multiple sheets in a single Config sheet and sync all in one execution
 - **Pagination Support**: Handles large datasets with configurable page size
 - **Debug Mode**: Optional debug logging to troubleshoot sync issues
-- **Error Handling**: Validates configuration and reports errors before execution
+- **Error Handling**: Validates configuration and reports errors; continues syncing other sheets if one fails
 
 ## Prerequisites
 
@@ -54,7 +57,7 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 
 ### Step 4: Configure the Script
 
-1. In the `Code.gs` file, locate the `INCIDENT_IQ_CONFIG` object near the top (lines 8-36)
+1. In the `Code.gs` file, locate the `INCIDENT_IQ_CONFIG` object near the top (lines 8-38)
 2. Update the following properties with your Incident IQ credentials:
    - `subdomain`: Your Incident IQ subdomain (e.g., if your URL is `https://acme.incidentiq.com`, use `"acme"`)
    - `siteId`: Your Incident IQ site GUID
@@ -71,21 +74,23 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 1. In your Google Sheet, navigate to the `Config` tab (or the sheet you named in `configSheetName`)
 2. Create a header row with these columns:
    - **Column A**: Sheet Name
-   - **Column B**: Ticket Type ID
+   - **Column B**: Ticket Type ID(s)
    - **Column C**: View ID
-   - **Column D**: Start Row (optional, defaults to 2)
-   - **Column E**: Start Column (optional, defaults to 5)
+   - **Column D**: Tags
+   - **Column E**: Start Row (optional, defaults to 2)
+   - **Column F**: Start Column (optional, defaults to 5)
 
 3. Add a row for each sheet you want to sync with its configuration:
 
-| Sheet Name | Ticket Type ID | View ID | Start Row | Start Column |
-|---|---|---|---|---|
-| Devices/Hardware | `{ticket-type-id-1}` | `{view-id-1}` | 2 | 5 |
-| Software Licenses | `{ticket-type-id-2}` | `{view-id-2}` | 2 | 5 |
+| Sheet Name | Ticket Type ID(s) | View ID | Tags | Start Row | Start Column |
+|---|---|---|---|---|---|
+| Devices/Hardware | `{ticket-type-id-1}` | `{view-id-1}` | `{tag-id-1},{tag-id-2}` | 2 | 5 |
+| Software Licenses | | `{view-id-2}` | `{tag-id-3}` | 2 | 5 |
 
-   - **Sheet Name**: Must match an existing sheet tab in your workbook
-   - **Ticket Type ID**: GUID of the ticket type to filter by. Obtain this from the `GET /api/v1.0/tickets/wizards` API endpoint (shows available ticket types)
-   - **View ID**: GUID of the view containing tickets to sync. Obtain this from the `GET /api/v1.0/users/views` API endpoint (shows views available to your API user account)
+   - **Sheet Name**: Must match an existing sheet tab in your workbook (required)
+   - **Ticket Type ID(s)**: GUID(s) of the ticket type(s) to filter by. Obtain from `GET /api/v1.0/tickets/wizards` API. Supports multiple values as comma-separated list (optional)
+   - **View ID**: GUID of the view containing tickets to sync. Obtain from `GET /api/v1.0/users/views` API (required)
+   - **Tags**: GUID(s) of tags to filter by. Obtain from `POST /api/v1.0/tags/query` API. Supports multiple values as comma-separated list (optional)
    - **Start Row/Column**: Where to begin writing data (optional; uses defaults if blank)
 
 ### Step 6: Save the Script
@@ -156,7 +161,9 @@ The script uses two key Incident IQ API endpoints:
 ```
 POST /api/v1.0/tickets?$p={pageIndex}&$s={pageSize}&$o=TicketClosedDate ASC
 ```
-- Filters tickets by view facet
+- Filters tickets by view facet (required)
+- Optionally filters by ticket type facet(s) (one or more)
+- Optionally filters by tag facet(s) (one or more)
 - Supports pagination with `$p` (page index) and `$s` (page size)
 - Sorted by closed date ascending
 
@@ -181,10 +188,11 @@ POST /api/v1.0/tickets/slas?$p={pageIndex}&$s={pageSize}&$o=TicketClosedDate ASC
   - `apiToken`
 - Check that all three values are filled in (non-empty strings)
 
-### "Ticket Type ID is required" or "View ID is required" Error
-- A row in the Config sheet is missing the required Ticket Type ID or View ID
+### "View ID is required" Error
+- A row in the Config sheet is missing the required View ID
 - Check row number in the error message
-- Add the missing values to that row
+- Add the missing View ID to that row
+- Note: Ticket Type ID and Tags are optional and can be left blank
 
 ### "Sheet 'X' was not found" Error
 - One of the sheets listed in your Config sheet doesn't exist in the workbook
@@ -212,15 +220,17 @@ The `Config` sheet should have the following columns:
 | Column | Name | Required | Description | Example |
 |--------|------|----------|-------------|---------|
 | A | Sheet Name | Yes | Name of the target sheet tab | `Devices/Hardware` |
-| B | Ticket Type ID | Yes | GUID of the ticket type filter. Obtain from `GET /api/v1.0/tickets/wizards` API | `{ticket-type-id}` |
+| B | Ticket Type ID(s) | No | GUID(s) of ticket type(s) to filter by. Obtain from `GET /api/v1.0/tickets/wizards` API. Use CSV for multiple | `{ticket-type-id-1},{ticket-type-id-2}` |
 | C | View ID | Yes | GUID of the view to sync. Obtain from `GET /api/v1.0/users/views` API | `{view-id}` |
-| D | Start Row | No | Row to begin writing (default: 2) | `2` |
-| E | Start Column | No | Column to begin writing (default: 5 for E) | `5` |
+| D | Tags | No | GUID(s) of tags to filter by. Obtain from `POST /api/v1.0/tags/query` API. Use CSV for multiple | `{tag-id-1},{tag-id-2}` |
+| E | Start Row | No | Row to begin writing (default: 2) | `2` |
+| F | Start Column | No | Column to begin writing (default: 5 for F) | `5` |
 
 **Notes**:
 - The first row should be a header row (will be skipped during processing)
 - Empty rows in the Config sheet are skipped
-- All rows must have at least Sheet Name, Ticket Type ID, and View ID
+- Only Sheet Name and View ID are required; all other columns are optional
+- Ticket Type ID(s) and Tags support comma-separated values (e.g., `id1,id2,id3`)
 - Start Row and Start Column default to 2 and 5 respectively if not provided
 
 ## Performance Notes
