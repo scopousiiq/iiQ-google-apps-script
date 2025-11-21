@@ -21,17 +21,6 @@ const INCIDENT_IQ_CONFIG = {
    */
   apiToken: '',
   /**
-   * Saved ticket view identifier (GUID) that the sync should evaluate.
-   * The script filters tickets by this view ID via the view facet in POST /api/v1.0/tickets.
-   */
-  viewId: '',
-  /**
-   * Row + column (E2) where the data table should begin inside the Devices/Hardware sheet.
-   */
-  startRow: 2,
-  startColumn: 5,
-  sheetName: 'Devices/Hardware',
-  /**
    * Pagination size for both ticket and SLA API calls.
    */
   pageSize: 1000,
@@ -42,26 +31,66 @@ const INCIDENT_IQ_CONFIG = {
   /**
    * Maximum records to fetch when debugMode is enabled.
    */
-  debugLimit: 100
+  debugLimit: 100,
+  /**
+   * Name of the config sheet containing sheet configurations.
+   * Expected columns: Sheet Name (A), Ticket Type ID (B), View ID (C), Start Row (D), Start Column (E)
+   */
+  configSheetName: 'Config'
 };
 
 /**
- * Entrypoint invoked from the Apps Script editor or via time-based trigger.
- * Gathers all tickets filtered by view, fetches SLA data in bulk, and writes rows.
+ * Main entrypoint: reads all configurations from the Config sheet and syncs each configured sheet.
+ * Invoked from the Apps Script editor or via time-based trigger.
  */
-function syncIncidentIqTickets() {
-  debugLog_('Starting syncIncidentIqTickets...');
-  validateConfig_();
-  debugLog_('Config validation passed.');
+function syncAllConfiguredSheets() {
+  debugLog_('Starting syncAllConfiguredSheets...');
+  validateApiConfig_();
+  debugLog_('API config validation passed.');
 
-  const sheet = SpreadsheetApp.getActive().getSheetByName(INCIDENT_IQ_CONFIG.sheetName);
-  if (!sheet) {
-    throw new Error(`Sheet "${INCIDENT_IQ_CONFIG.sheetName}" was not found in the active spreadsheet.`);
+  const configSheet = SpreadsheetApp.getActive().getSheetByName(INCIDENT_IQ_CONFIG.configSheetName);
+  if (!configSheet) {
+    throw new Error(`Config sheet "${INCIDENT_IQ_CONFIG.configSheetName}" was not found.`);
   }
-  debugLog_(`Found sheet: ${INCIDENT_IQ_CONFIG.sheetName}`);
+  debugLog_(`Found config sheet: ${INCIDENT_IQ_CONFIG.configSheetName}`);
+
+  const configs = readSheetConfigurations_(configSheet);
+  debugLog_(`Read ${configs.length} sheet configurations from config sheet.`);
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  configs.forEach((config, index) => {
+    try {
+      debugLog_(`\n[${index + 1}/${configs.length}] Processing: ${config.sheetName}...`);
+      syncSheetWithConfig(config);
+      successCount++;
+    } catch (error) {
+      failureCount++;
+      console.error(`Failed to sync ${config.sheetName}: ${error.message}`);
+      debugLog_(`Error syncing ${config.sheetName}: ${error.message}`);
+      // Continue processing other sheets even if one fails
+    }
+  });
+
+  debugLog_(`\nsyncAllConfiguredSheets complete: ${successCount} succeeded, ${failureCount} failed.`);
+}
+
+/**
+ * Syncs a single sheet with the provided configuration.
+ * @param {Object} config - Configuration object with sheetName, ticketTypeId, viewId, startRow, startColumn
+ */
+function syncSheetWithConfig(config) {
+  debugLog_(`Starting sync for sheet: ${config.sheetName}`);
+
+  const sheet = SpreadsheetApp.getActive().getSheetByName(config.sheetName);
+  if (!sheet) {
+    throw new Error(`Sheet "${config.sheetName}" was not found in the active spreadsheet.`);
+  }
+  debugLog_(`Found sheet: ${config.sheetName}`);
 
   // Step 1: Gather all tickets from the view using view facet filter
-  debugLog_(`Step 1: Fetching tickets from view ${INCIDENT_IQ_CONFIG.viewId}...`);
+  debugLog_(`Step 1: Fetching tickets from view ${config.viewId}...`);
   if (INCIDENT_IQ_CONFIG.debugMode) {
     debugLog_(`  DEBUG MODE: Limiting results to ${INCIDENT_IQ_CONFIG.debugLimit} records.`);
   }
@@ -69,7 +98,7 @@ function syncIncidentIqTickets() {
   let pageIndex = 0;
   while (true) {
     debugLog_(`  Fetching ticket page ${pageIndex}...`);
-    const ticketPage = searchTicketsByView_(INCIDENT_IQ_CONFIG.viewId, pageIndex, INCIDENT_IQ_CONFIG.pageSize);
+    const ticketPage = searchTicketsByView_(config.viewId, config.ticketTypeId, pageIndex, INCIDENT_IQ_CONFIG.pageSize);
     const items = Array.isArray(ticketPage?.Items) ? ticketPage.Items : [];
     debugLog_(`  Page ${pageIndex} returned ${items.length} tickets.`);
     
@@ -107,14 +136,14 @@ function syncIncidentIqTickets() {
   debugLog_(`Step 3 complete: Built ${rows.length} rows.`);
 
   debugLog_('Clearing destination range and writing data to spreadsheet...');
-  clearDestination_(sheet);
+  clearDestination_(sheet, config);
   if (rows.length) {
     sheet
-      .getRange(INCIDENT_IQ_CONFIG.startRow, INCIDENT_IQ_CONFIG.startColumn, rows.length, 7)
+      .getRange(config.startRow, config.startColumn, rows.length, 7)
       .setValues(rows);
     debugLog_(`Successfully wrote ${rows.length} rows to spreadsheet.`);
   }
-  debugLog_('syncIncidentIqTickets completed successfully.');
+  debugLog_(`Sync completed successfully for ${config.sheetName}.`);
 }
 
 /**
@@ -127,15 +156,14 @@ function debugLog_(message) {
 }
 
 /**
- * Ensures critical config tokens are populated prior to running the sync.
+ * Ensures critical API config tokens are populated prior to running the sync.
  */
-function validateConfig_() {
-  debugLog_('Validating configuration...');
+function validateApiConfig_() {
+  debugLog_('Validating API configuration...');
   const missing = Object.entries({
     subdomain: INCIDENT_IQ_CONFIG.subdomain,
     siteId: INCIDENT_IQ_CONFIG.siteId,
-    apiToken: INCIDENT_IQ_CONFIG.apiToken,
-    viewId: INCIDENT_IQ_CONFIG.viewId
+    apiToken: INCIDENT_IQ_CONFIG.apiToken
   })
     .filter(([, value]) => !value)
     .map(([key]) => key);
@@ -145,13 +173,56 @@ function validateConfig_() {
     console.error(errorMsg);
     throw new Error(errorMsg);
   }
-  debugLog_('All configuration values present.');
+  debugLog_('All API configuration values present.');
+}
+
+/**
+ * Reads sheet configurations from the Config sheet.
+ * Expected columns: A=Sheet Name, B=Ticket Type ID, C=View ID, D=Start Row, E=Start Column
+ * @returns {Array} Array of configuration objects
+ */
+function readSheetConfigurations_(configSheet) {
+  const data = configSheet.getDataRange().getValues();
+  const configs = [];
+
+  // Skip header row (index 0), process remaining rows
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const sheetName = row[0]?.toString().trim();
+    const ticketTypeId = row[1]?.toString().trim();
+    const viewId = row[2]?.toString().trim();
+    const startRow = row[3] ? parseInt(row[3]) : 2;
+    const startColumn = row[4] ? parseInt(row[4]) : 5;
+
+    // Skip empty rows
+    if (!sheetName) {
+      continue;
+    }
+
+    // Validate required fields
+    if (!ticketTypeId) {
+      throw new Error(`Row ${i + 1}: Ticket Type ID is required for sheet "${sheetName}".`);
+    }
+    if (!viewId) {
+      throw new Error(`Row ${i + 1}: View ID is required for sheet "${sheetName}".`);
+    }
+
+    configs.push({
+      sheetName,
+      ticketTypeId,
+      viewId,
+      startRow,
+      startColumn
+    });
+  }
+
+  return configs;
 }
 
 /**
  * Issues POST /api/v1.0/tickets with a view facet filter and pagination controls.
  */
-function searchTicketsByView_(viewId, pageIndex, pageSize) {
+function searchTicketsByView_(viewId, ticketTypeId, pageIndex, pageSize) {
   const query = buildQueryString_({ $p: pageIndex, $s: pageSize, $o: 'TicketClosedDate ASC' });
   const requestBody = {
     Filters: [
@@ -159,6 +230,10 @@ function searchTicketsByView_(viewId, pageIndex, pageSize) {
         Facet: 'view',
         Id: viewId,
         Selected: true
+      },
+      {
+        Facet: 'tickettype',
+        Id: ticketTypeId
       }
     ]
   };
@@ -322,14 +397,14 @@ function formatDateForSheet_(isoDate) {
   return Utilities.formatDate(date, tz, 'yyyy-MM-dd HH:mm');
 }
 
-function clearDestination_(sheet) {
+function clearDestination_(sheet, config) {
   const lastRow = sheet.getLastRow();
-  if (lastRow >= INCIDENT_IQ_CONFIG.startRow) {
+  if (lastRow >= config.startRow) {
     sheet
       .getRange(
-        INCIDENT_IQ_CONFIG.startRow,
-        INCIDENT_IQ_CONFIG.startColumn,
-        Math.max(lastRow - INCIDENT_IQ_CONFIG.startRow + 1, 1),
+        config.startRow,
+        config.startColumn,
+        Math.max(lastRow - config.startRow + 1, 1),
         7
       )
       .clearContent();

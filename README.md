@@ -28,8 +28,8 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 3. **API Credentials**: 
    - Subdomain (from your Incident IQ tenant URL)
    - Site ID (GUID of your active site)
-   - API Token (Bearer token with ticket/sla endpoint access)◊
-   - View ID (GUID of a saved ticket view to sync)
+   - API Token (Bearer token with ticket/sla endpoint access)
+4. **Sheet Configuration**: A "Config" sheet to define which tabs sync and their ticket type IDs and view IDs
 
 ## Installation in Google Sheets
 
@@ -37,7 +37,8 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 
 1. Go to [Google Sheets](https://sheets.google.com)
 2. Create a new sheet or open an existing one
-3. Ensure you have a sheet tab named `Devices/Hardware` (or update the `sheetName` config to match your tab)
+3. Create a sheet tab named `Config` (this will store your sync configurations)
+4. Create additional sheet tabs for each data source (e.g., `Devices/Hardware`, `Software Licenses`, etc.)
 
 ### Step 2: Open Apps Script Editor
 
@@ -53,22 +54,41 @@ The script uses efficient pagination and bulk API calls to minimize API requests
 
 ### Step 4: Configure the Script
 
-1. In the `Code.gs` file, locate the `INCIDENT_IQ_CONFIG` object near the top (lines 8-42)
+1. In the `Code.gs` file, locate the `INCIDENT_IQ_CONFIG` object near the top (lines 8-36)
 2. Update the following properties with your Incident IQ credentials:
    - `subdomain`: Your Incident IQ subdomain (e.g., if your URL is `https://acme.incidentiq.com`, use `"acme"`)
    - `siteId`: Your Incident IQ site GUID
    - `apiToken`: Your Incident IQ API Bearer token
-   - `viewId`: The GUID of the view you want to sync
 
 3. Optional: Configure these properties as needed:
-   - `startRow`: Which row to start writing data (default: 2)
-   - `startColumn`: Which column to start writing (default: 5 for column E)
-   - `sheetName`: Name of the sheet tab (default: `"Devices/Hardware"`)
    - `pageSize`: Records per API request (default: 1000, max: 1000)
    - `debugMode`: Set to `true` to enable console logging (default: false)
    - `debugLimit`: Max records to fetch when in debug mode (default: 100)
+   - `configSheetName`: Name of the config sheet (default: `"Config"`)
 
-### Step 5: Save the Script
+### Step 5: Set Up the Config Sheet
+
+1. In your Google Sheet, navigate to the `Config` tab (or the sheet you named in `configSheetName`)
+2. Create a header row with these columns:
+   - **Column A**: Sheet Name
+   - **Column B**: Ticket Type ID
+   - **Column C**: View ID
+   - **Column D**: Start Row (optional, defaults to 2)
+   - **Column E**: Start Column (optional, defaults to 5)
+
+3. Add a row for each sheet you want to sync with its configuration:
+
+| Sheet Name | Ticket Type ID | View ID | Start Row | Start Column |
+|---|---|---|---|---|
+| Devices/Hardware | d5d91f20-2269-e611-80f1-000c29ab80b0 | {view-guid-1} | 2 | 5 |
+| Software Licenses | a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6 | {view-guid-2} | 2 | 5 |
+
+   - **Sheet Name**: Must match an existing sheet tab in your workbook
+   - **Ticket Type ID**: GUID of the ticket type to filter by (obtain from Incident IQ)
+   - **View ID**: GUID of the view containing tickets to sync
+   - **Start Row/Column**: Where to begin writing data (optional; uses defaults if blank)
+
+### Step 6: Save the Script
 
 Click **File** → **Save** (or use Ctrl+S / Cmd+S) and give your project a name (e.g., "IncidentIQ Sync")
 
@@ -76,24 +96,26 @@ Click **File** → **Save** (or use Ctrl+S / Cmd+S) and give your project a name
 
 ### Running the Script Manually
 
-1. In the Apps Script editor, locate the `syncIncidentIqTickets` function in the code
+1. In the Apps Script editor, locate the `syncAllConfiguredSheets` function in the code
 2. Click the **▶ Run** button (play icon) at the top
 3. When prompted, grant authorization for the script to access your spreadsheet
-4. The script will execute and write data to your sheet
+4. The script will execute and read configurations from the `Config` sheet, then sync each configured sheet in sequence
+
+**Note**: If a sheet sync fails, the script will log the error and continue with the next sheet. Check the logs for details.
 
 ### Running on a Schedule (Optional Time-Based Trigger)
 
 1. In the Apps Script editor, click **Triggers** (clock icon on the left)
 2. Click **+ Create new trigger**
 3. Configure the trigger:
-   - **Choose which function to run**: `syncIncidentIqTickets`
+   - **Choose which function to run**: `syncAllConfiguredSheets`
    - **Which runs at deployment**: `Head`
    - **Select event source**: `Time-driven`
    - **Select type of time interval**: Choose your preferred interval (e.g., "Daily", "Every 6 hours")
    - **Select day and time** (if daily): Choose the time to run
 4. Click **Save**
 
-Now the script will run automatically on your schedule.
+Now the script will run automatically on your schedule, syncing all configured sheets.
 
 ### Monitoring Execution with Debug Mode
 
@@ -148,38 +170,26 @@ POST /api/v1.0/tickets/slas?$p={pageIndex}&$s={pageSize}&$o=TicketClosedDate ASC
 
 ## Troubleshooting
 
-### "Sheet not found" Error
-- Verify that a sheet tab named `Devices/Hardware` exists in your spreadsheet
-- Or update the `sheetName` property in `INCIDENT_IQ_CONFIG` to match your actual sheet name
+### "Config sheet not found" Error
+- Verify that a sheet tab named `Config` exists in your spreadsheet
+- Or update the `configSheetName` property in `INCIDENT_IQ_CONFIG` to match your actual config sheet name
 
 ### "Configure INCIDENT_IQ_CONFIG" Error
-- One or more required config values are missing:
+- One or more required API config values are missing:
   - `subdomain`
   - `siteId`
   - `apiToken`
-  - `viewId`
-- Check that all four values are filled in (non-empty strings)
+- Check that all three values are filled in (non-empty strings)
 
-### "Incident IQ request failed (401)" Error
-- Your API token is invalid or has expired
-- Generate a new token in Incident IQ and update `apiToken` in the config
+### "Ticket Type ID is required" or "View ID is required" Error
+- A row in the Config sheet is missing the required Ticket Type ID or View ID
+- Check row number in the error message
+- Add the missing values to that row
 
-### "Incident IQ request failed (403)" Error
-- Your API token doesn't have permission to access the endpoints
-- Verify the token has rights to `POST /api/v1.0/tickets` and `POST /api/v1.0/tickets/slas`
-
-### SLA Column Shows Only "Actual" Value
-- The script is finding actual resolution time but not the SLA target
-- Set `debugMode: true` and run the script
-- Check **View** → **Logs** for debug output
-- Look for lines containing "Debug - slaDetails keys" to see the actual API response structure
-- Report this to support with the debug output
-
-### No Data Appears in Spreadsheet
-- Enable debug mode to see detailed logs
-- Verify the view (viewId) contains tickets
-- Check that the sheet tab is correct
-- Verify `startRow` and `startColumn` point to an empty area (or be prepared to overwrite existing data)
+### "Sheet 'X' was not found" Error
+- One of the sheets listed in your Config sheet doesn't exist in the workbook
+- Create the missing sheet or update the Config sheet to reference an existing sheet name
+- Sheet names are case-sensitive
 
 ## Configuration Reference
 
@@ -190,13 +200,28 @@ POST /api/v1.0/tickets/slas?$p={pageIndex}&$s={pageSize}&$o=TicketClosedDate ASC
 | `subdomain` | string | `""` | Subdomain of your Incident IQ tenant URL |
 | `siteId` | string | `""` | GUID of your active Incident IQ site |
 | `apiToken` | string | `""` | Bearer token for API authentication |
-| `viewId` | string | `""` | GUID of the view to sync |
-| `startRow` | number | `2` | Row to begin writing data |
-| `startColumn` | number | `5` | Column to begin writing (1=A, 2=B, 5=E) |
-| `sheetName` | string | `"Devices/Hardware"` | Name of the target sheet tab |
 | `pageSize` | number | `1000` | Records per API request (1-1000) |
 | `debugMode` | boolean | `false` | Enable/disable console logging |
 | `debugLimit` | number | `100` | Max records to fetch in debug mode |
+| `configSheetName` | string | `"Config"` | Name of the sheet containing sync configurations |
+
+### Config Sheet Format
+
+The `Config` sheet should have the following columns:
+
+| Column | Name | Required | Description | Example |
+|--------|------|----------|-------------|---------|
+| A | Sheet Name | Yes | Name of the target sheet tab | `Devices/Hardware` |
+| B | Ticket Type ID | Yes | GUID of the ticket type filter | `d5d91f20-2269-e611-80f1-000c29ab80b0` |
+| C | View ID | Yes | GUID of the view to sync | `12345678-abcd-ef01-2345-6789abcdef01` |
+| D | Start Row | No | Row to begin writing (default: 2) | `2` |
+| E | Start Column | No | Column to begin writing (default: 5 for E) | `5` |
+
+**Notes**:
+- The first row should be a header row (will be skipped during processing)
+- Empty rows in the Config sheet are skipped
+- All rows must have at least Sheet Name, Ticket Type ID, and View ID
+- Start Row and Start Column default to 2 and 5 respectively if not provided
 
 ## Performance Notes
 
