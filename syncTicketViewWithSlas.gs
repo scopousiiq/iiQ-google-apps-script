@@ -34,7 +34,7 @@ const INCIDENT_IQ_CONFIG = {
   debugLimit: 100,
   /**
    * Name of the config sheet containing sheet configurations.
-   * Expected columns: Sheet Name (A), Ticket Type ID (B), View ID (C), Start Row (D), Start Column (E)
+   * Expected columns: Sheet Name (A), Ticket Type ID(s) (B), View ID (C), Tags (D), Start Row (E), Start Column (F)
    */
   configSheetName: 'Config'
 };
@@ -78,7 +78,7 @@ function syncAllConfiguredSheets() {
 
 /**
  * Syncs a single sheet with the provided configuration.
- * @param {Object} config - Configuration object with sheetName, ticketTypeId, viewId, startRow, startColumn
+ * @param {Object} config - Configuration object with sheetName, ticketTypeIds, viewId, tags, startRow, startColumn
  */
 function syncSheetWithConfig(config) {
   debugLog_(`Starting sync for sheet: ${config.sheetName}`);
@@ -91,6 +91,12 @@ function syncSheetWithConfig(config) {
 
   // Step 1: Gather all tickets from the view using view facet filter
   debugLog_(`Step 1: Fetching tickets from view ${config.viewId}...`);
+  if (config.ticketTypeIds.length > 0) {
+    debugLog_(`  Filtering by ticket types: ${config.ticketTypeIds.join(', ')}`);
+  }
+  if (config.tags.length > 0) {
+    debugLog_(`  Filtering by tags: ${config.tags.join(', ')}`);
+  }
   if (INCIDENT_IQ_CONFIG.debugMode) {
     debugLog_(`  DEBUG MODE: Limiting results to ${INCIDENT_IQ_CONFIG.debugLimit} records.`);
   }
@@ -98,7 +104,7 @@ function syncSheetWithConfig(config) {
   let pageIndex = 0;
   while (true) {
     debugLog_(`  Fetching ticket page ${pageIndex}...`);
-    const ticketPage = searchTicketsByView_(config.viewId, config.ticketTypeId, pageIndex, INCIDENT_IQ_CONFIG.pageSize);
+    const ticketPage = searchTicketsByView_(config.viewId, config.ticketTypeIds, config.tags, pageIndex, INCIDENT_IQ_CONFIG.pageSize);
     const items = Array.isArray(ticketPage?.Items) ? ticketPage.Items : [];
     debugLog_(`  Page ${pageIndex} returned ${items.length} tickets.`);
     
@@ -178,7 +184,7 @@ function validateApiConfig_() {
 
 /**
  * Reads sheet configurations from the Config sheet.
- * Expected columns: A=Sheet Name, B=Ticket Type ID, C=View ID, D=Start Row, E=Start Column
+ * Expected columns: A=Sheet Name, B=Ticket Type ID(s) (optional, CSV for multiple), C=View ID, D=Tags (optional, CSV for multiple), E=Start Row, F=Start Column
  * @returns {Array} Array of configuration objects
  */
 function readSheetConfigurations_(configSheet) {
@@ -189,28 +195,39 @@ function readSheetConfigurations_(configSheet) {
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const sheetName = row[0]?.toString().trim();
-    const ticketTypeId = row[1]?.toString().trim();
+    const ticketTypeIdsRaw = row[1]?.toString().trim() || '';
     const viewId = row[2]?.toString().trim();
-    const startRow = row[3] ? parseInt(row[3]) : 2;
-    const startColumn = row[4] ? parseInt(row[4]) : 5;
+    const tagsRaw = row[3]?.toString().trim() || '';
+    const startRow = row[4] ? parseInt(row[4]) : 2;
+    const startColumn = row[5] ? parseInt(row[5]) : 5;
 
     // Skip empty rows
     if (!sheetName) {
       continue;
     }
 
-    // Validate required fields
-    if (!ticketTypeId) {
-      throw new Error(`Row ${i + 1}: Ticket Type ID is required for sheet "${sheetName}".`);
-    }
+    // Validate required fields (only viewId is required now)
     if (!viewId) {
       throw new Error(`Row ${i + 1}: View ID is required for sheet "${sheetName}".`);
     }
 
+    // Parse comma-separated ticket type IDs and trim each
+    const ticketTypeIds = ticketTypeIdsRaw
+      .split(',')
+      .map(id => id.trim())
+      .filter(id => id.length > 0);
+
+    // Parse comma-separated tags and trim each
+    const tags = tagsRaw
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(tag => tag.length > 0);
+
     configs.push({
       sheetName,
-      ticketTypeId,
+      ticketTypeIds,
       viewId,
+      tags,
       startRow,
       startColumn
     });
@@ -221,21 +238,45 @@ function readSheetConfigurations_(configSheet) {
 
 /**
  * Issues POST /api/v1.0/tickets with a view facet filter and pagination controls.
+ * The tickettype and tag facets are optional and will be omitted if not provided.
+ * @param {string} viewId - The view ID to filter by
+ * @param {Array} ticketTypeIds - Array of ticket type IDs (can be empty)
+ * @param {Array} tags - Array of tag values (can be empty)
+ * @param {number} pageIndex - Current page index
+ * @param {number} pageSize - Number of records per page
  */
-function searchTicketsByView_(viewId, ticketTypeId, pageIndex, pageSize) {
+function searchTicketsByView_(viewId, ticketTypeIds, tags, pageIndex, pageSize) {
   const query = buildQueryString_({ $p: pageIndex, $s: pageSize, $o: 'TicketClosedDate ASC' });
-  const requestBody = {
-    Filters: [
-      {
-        Facet: 'view',
-        Id: viewId,
-        Selected: true
-      },
-      {
+  const filters = [
+    {
+      Facet: 'view',
+      Id: viewId,
+      Selected: true
+    }
+  ];
+
+  // Add tickettype facet for each ticket type ID provided
+  if (Array.isArray(ticketTypeIds) && ticketTypeIds.length > 0) {
+    ticketTypeIds.forEach(ticketTypeId => {
+      filters.push({
         Facet: 'tickettype',
         Id: ticketTypeId
-      }
-    ]
+      });
+    });
+  }
+
+  // Add tag facet for each tag provided
+  if (Array.isArray(tags) && tags.length > 0) {
+    tags.forEach(tag => {
+      filters.push({
+        Facet: 'tag',
+        Id: tag
+      });
+    });
+  }
+
+  const requestBody = {
+    Filters: filters
   };
   debugLog_(`  API: POST /api/v1.0/tickets${query}`);
   return incidentIqRequest_(`/api/v1.0/tickets${query}`, 'post', requestBody);
